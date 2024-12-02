@@ -20,6 +20,14 @@ def isAtLeastOnePropertyTrueForPrefix(String prefix) {
 }
 
 android {
+    signingConfigs {
+        release {
+            storeFile file('/home/dzajac/android-keystore')
+            storePassword 'PiscestheSniffer!9'
+            keyAlias 'key0'
+            keyPassword 'ilikecheese101'
+        }
+    }
     namespace project.properties['app.application_id']
     compileSdk 33
 
@@ -129,6 +137,7 @@ android {
             jniDebuggable false
             pseudoLocalesEnabled false
             zipAlignEnabled true
+            signingConfig signingConfigs.release
         }
     }
     compileOptions {

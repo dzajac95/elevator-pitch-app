@@ -39,11 +39,23 @@
 
 #include "dns_task.h"
 
+#ifndef NDEBUG
+#define SRV_HOSTNAME "dzajac-zenbook.local"
+#else
+#define SRV_HOSTNAME "elevator.local"
+#endif
+
 #define MY_LOG_TAG "UR_MOM"
 
 #define LOG_INFO(...) do { __android_log_print(ANDROID_LOG_INFO, MY_LOG_TAG, __VA_ARGS__); } while(0)
 #define LOG_ERR(...) do { __android_log_print(ANDROID_LOG_ERROR, MY_LOG_TAG, __VA_ARGS__); } while(0)
 #define LOG_DEBUG(...) do { __android_log_print(ANDROID_LOG_DEBUG, MY_LOG_TAG, __VA_ARGS__); } while(0)
+
+// UI Definitions
+#define BUTT_COLOR_DEF BLUE
+#define BUTT_COLOR_ACTIVE GREEN
+#define BUTT_COLOR_INACTIVE GRAY
+#define BUTT_COLOR_STOP RED
 
 #define FONT_SIZE 36
 #define FONT_SPACING 2.0f
@@ -57,10 +69,17 @@ enum conn_state {
 };
 
 enum conn_err {
+    ERR_NONE,
     ERR_DNS_FAILED,
     ERR_CONN_REFUSED,
     ERR_CONN_TIMEOUT,
     ERR_SOCKET_FAIL,
+};
+
+enum move_state {
+    MOVE_STOP,
+    MOVE_UP,
+    MOVE_DOWN,
 };
 
 typedef struct {
@@ -71,11 +90,20 @@ typedef struct {
     bool active;
 } button_t;
 
+typedef struct {
+    enum conn_state conn;
+    enum conn_err conn_err;
+    enum move_state move;
+} app_state;
+
 // Global state
 static Vector2 screen_dim;
 static Font font = {0};
-enum conn_state c_state = RESOLVING;
-enum conn_err c_error = 0;
+static app_state state = {
+        .conn = RESOLVING,
+        .conn_err = ERR_NONE,
+        .move = MOVE_STOP,
+};
 
 
 static Rectangle RecScreenToPixel(Rectangle rec)
@@ -110,7 +138,7 @@ static bool button(button_t *b) {
 }
 
 static bool up_button() {
-    bool active = c_state == CONNECTED;
+    bool active = state.conn == CONNECTED;
     const Vector2 size = {
         .x = 0.4f,
         .y = 0.1f,
@@ -121,7 +149,15 @@ static bool up_button() {
         .width = size.x,
         .height = size.y
     };
-    Color bg = active ? BLUE : GRAY;
+    Color bg;
+    if (active) {
+        if (state.move == MOVE_UP)
+            bg = BUTT_COLOR_ACTIVE;
+        else
+            bg = BUTT_COLOR_DEF;
+    } else {
+        bg = BUTT_COLOR_INACTIVE;
+    }
     button_t butt = {
         bounds,
         WHITE,
@@ -134,7 +170,7 @@ static bool up_button() {
 }
 
 static bool stop_button() {
-    bool active = c_state == CONNECTED;
+    bool active = state.conn == CONNECTED;
     const Vector2 size = {
         .x = 0.4f,
         .y = 0.1f,
@@ -145,7 +181,7 @@ static bool stop_button() {
         .width = size.x,
         .height = size.y
     };
-    Color bg = active ? BLUE : GRAY;
+    Color bg = active ? BUTT_COLOR_STOP : BUTT_COLOR_INACTIVE;
     button_t butt = {
         bounds,
         WHITE,
@@ -158,7 +194,7 @@ static bool stop_button() {
 }
 
 static bool down_button() {
-    bool active = c_state == CONNECTED;
+    bool active = state.conn == CONNECTED;
     const Vector2 size = {
         .x = 0.4f,
         .y = 0.1f,
@@ -169,7 +205,15 @@ static bool down_button() {
         .width = size.x,
         .height = size.y
     };
-    Color bg = active ? BLUE : GRAY;
+    Color bg;
+    if (active) {
+        if (state.move == MOVE_DOWN)
+            bg = BUTT_COLOR_ACTIVE;
+        else
+            bg = BUTT_COLOR_DEF;
+    } else {
+        bg = BUTT_COLOR_INACTIVE;
+    }
     button_t butt = {
         bounds,
         WHITE,
@@ -232,7 +276,7 @@ int main(void)
         exit(1);
     }
     dns_res_t dns_result;
-    dns_task_submit_query("elevator.local", dns_done_cb, &dns_result);
+    dns_task_submit_query(SRV_HOSTNAME, dns_done_cb, &dns_result);
     int sock;
     socket_init(&sock);
     struct pollfd pfd = {
@@ -244,18 +288,18 @@ int main(void)
     while (!WindowShouldClose())    // Detect window close button or ESC key
     {
 
-        switch (c_state) {
+        switch (state.conn) {
             case RESOLVING:
                 status_color = YELLOW;
                 if (dns_done == 1) {
                     LOG_INFO("DNS Task Done!\n");
                     if (dns_result.res < 0) {
                         LOG_ERR("DNS Task Failed :(");
-                        c_error = ERR_DNS_FAILED;
-                        c_state = CONN_ERR;
+                        state.conn_err = ERR_DNS_FAILED;
+                        state.conn = CONN_ERR;
                     } else {
                         LOG_INFO("Got IP: %s", inet_ntoa(dns_result.addr.sin_addr));
-                        c_state = START_CONNECT;
+                        state.conn = START_CONNECT;
                     }
                     dns_done = 0;
                 }
@@ -267,15 +311,15 @@ int main(void)
                 int err = errno;
                 if (ret == 0) {
                     LOG_INFO("Successfully connected to device!");
-                    c_state = CONNECTED;
+                    state.conn = CONNECTED;
                 } else {
                     if (err == EINPROGRESS) {
                         LOG_INFO("Awaiting connection.");
-                        c_state = CONNECTING;
+                        state.conn = CONNECTING;
                     } else {
                         LOG_ERR("Unexpected error ocurred: %s", strerror(errno));
-                        c_error = ERR_CONN_REFUSED;
-                        c_state = CONN_ERR;
+                        state.conn_err = ERR_CONN_REFUSED;
+                        state.conn = CONN_ERR;
                     }
                 }
                 break;
@@ -284,7 +328,7 @@ int main(void)
                 // polling
                 if (poll(&pfd, 1, 0) > 0 && pfd.revents & POLLOUT) {
                     LOG_INFO("Successfully connected, socket is ready for writing!");
-                    c_state = CONNECTED;
+                    state.conn = CONNECTED;
                 }
                 break;
             case CONNECTED:
@@ -302,18 +346,21 @@ int main(void)
         ClearBackground(RAYWHITE);
         DrawRectangleRec(status_rec, status_color);
 
-        int ret;
+        int ret = 0;
         if (up_button()) {
             LOG_INFO("Up!");
             ret = write(sock, up, strlen(up));
+            if (state.move == MOVE_STOP) state.move = MOVE_UP;
         }
         if (stop_button()) {
             LOG_INFO("Stop!");
             ret = write(sock, stop, strlen(stop));
+            state.move = MOVE_STOP;
         }
         if (down_button()) {
             LOG_INFO("Down!");
             ret = write(sock, down, strlen(down));
+            if (state.move == MOVE_STOP) state.move = MOVE_DOWN;
         }
         if (ret < 0) {
             LOG_INFO("Error writing to socket: %s", strerror(errno));
